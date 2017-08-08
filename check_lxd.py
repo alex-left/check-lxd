@@ -12,39 +12,41 @@ state = {
     "ok": 0
 }
 
+
 # Logic
 def parser_args():
+    """Parse args using argparse and subparsers. return parse_args()"""
     parser = argparse.ArgumentParser(
         description="""nagios plugin for check LXD containers""")
 
     subparsers = parser.add_subparsers(dest='command')
     parser_state = subparsers.add_parser('state',
-                                        help='''Check the state of the container and generate
-                                        CRITICAL state if not running''')
+                                         help='''Check the state of the container and generate
+                                         CRITICAL state if not running''')
 
     parser_run = subparsers.add_parser('run',
-                                       help='''run a command into container''')
+                                       help='''Run a custom command into container.
+                                       example: check_lxd run -c "/bin/bash /home/foo/foo.sh"''')
 
     parser_run.add_argument("cmd", nargs=1, type=str,
-                            help='''Run a custom command into container, remember close it in quotes.
+                            help='''the command to run in container, remember close it in quotes.
                             example: check_lxd run -c "/bin/bash /home/foo/foo.sh"''')
 
     parser_procs = subparsers.add_parser('procs',
-                                        help='''Check processes of the container
-                                        and generates WARNING or CRITICAL states if
-                                        the number is outside of the required threshold ranges.
-                                        ex: check_lxd procs -w 12-14 -c 12-20''')
-
+                                         help='''Check processes of the container
+                                         and generates WARNING or CRITICAL states if
+                                         the number is outside of the required threshold ranges.
+                                         ex: check_lxd procs -w 12-14 -c 12-20''')
 
     parser_procs.add_argument("-w", "--warning", nargs=1, required=True,
-                            help='''range of processes for state WARNING
-                            min-max''', type=str)
+                              help='''range of processes for state WARNING
+                              min-max''', type=str)
 
     parser_mem = subparsers.add_parser('mem',
-                                    help='''Check the amount of memory used by the container
-                                    and generates WARNING or CRITICAL states if
-                                    the number is higher of the threshold defined in MB.
-                                    ex: check_lxd mem -w 1024 -c 2048''')
+                                       help='''Check the amount of memory used by the container
+                                       and generates WARNING or CRITICAL states if
+                                       the number is higher of the threshold defined in MB.
+                                       ex: check_lxd mem -w 1024 -c 2048''')
 
     parser_mem.add_argument("-c", "--critical", nargs=1, required=True,
                             help='''amount of memory in MB for state CRITICAL''', type=int)
@@ -58,12 +60,15 @@ def parser_args():
 
     return parser.parse_args()
 
+
 def return_state(state, msg=""):
+    """Used by check functions to deliver a nagios a info line and status code."""
     print(msg)
     exit(state)
 
+
 def get_containers_data():
-    # return dict of contaners info.
+    """return dict of contaners info from lxc command"""
     try:
         result = check_output(["lxc", "list", "--format", "yaml"])
     except Exception as error:
@@ -72,37 +77,48 @@ def get_containers_data():
 
 
 def find_container(container_name):
+    """search a container name and return his data or deliver a unknown state"""
     containers_data = get_containers_data()
     for item in containers_data:
         if item['container']['name'] == container_name:
             return item
-    return_state(state['unknown'], "ERROR: the container %s don't exist" % container_name)
+    return_state(state['unknown'],
+                 "ERROR: the container %s don't exist" % container_name)
 
 
 def check_container_state(container_data):
-        if container_data['container']['status'].lower() != "running":
-            return_state(
-                state['critical'], "CRITICAL: the container %s don't running" % container_data)
-        else:
-            return_state(
-                state['ok'], "OK: the container %s is running" % container_data)
+    """Deliver critical if container not running, else OK"""
+    if container_data['container']['status'].lower() != "running":
+        return_state(
+            state['critical'],
+            "CRITICAL: the container %s don't running" % container_data['container']['name'])
+    else:
+        return_state(
+            state['ok'], "OK: the container %s is running" % container_data['container']['name'])
+
 
 def check_container_mem(container_data, critical, warning):
+    """deliver status code based on the mem thresholds"""
     used_mem = int(container_data['state']['memory']['usage'] / 1048576)
     if used_mem > critical[0]:
         return_state(
-            ['critical'], "CRITICAL, the container consumes %dM of RAM, over %dM" % (used_mem, critical[0]))
+            ['critical'],
+            "CRITICAL, the container consumes %dM of RAM, over %dM" % (used_mem, critical[0]))
     if used_mem > warning[0]:
         return_state(
-            state['warning'], "WARNING, the container consumes %dM of RAM, over %dM" % (used_mem, warning[0]))
+            state['warning'],
+            "WARNING, the container consumes %dM of RAM, over %dM" % (used_mem, warning[0]))
     return_state(
         state['ok'], "OK, the container consumes %dM of RAM, under thresholds" % used_mem)
 
+
 def check_container_procs(container_data, critical, warning):
+    """check syntax of thresholds "int-int" and deliver status code based on
+    the procs thresholds"""
     try:
         critical = critical[0].split("-")
         warning = warning[0].split("-")
-        assert ( len(critical) == 2 and len(warning) == 2 )
+        assert (len(critical) == 2 and len(warning) == 2)
         for item in range(2):
             critical[item] = int(critical[item])
             warning[item] = int(warning[item])
@@ -122,6 +138,8 @@ def check_container_procs(container_data, critical, warning):
 
 
 def run_in_container(container_name, cmd):
+    """run command in container using lxc command, and deliver the status
+    code and last message"""
     try:
         res = check_output("lxc exec " + container_name + " -- " + cmd, shell=True)
         return_state(state["ok"], str(res.decode()))
@@ -133,9 +151,11 @@ def run_in_container(container_name, cmd):
         else:
             return_state(state["unknown"], "Code status: %d, msg: %s" % (ret.returncode, str(ret.output.decode())))
 
+
 # Main
 args = parser_args()
 container_name = args.container_name[0]
+# this get container data or return unknown if container dont't exist
 container_data = find_container(container_name)
 
 if args.command == 'state':
@@ -145,4 +165,4 @@ if args.command == 'mem':
 if args.command == 'procs':
     check_container_procs(container_data, args.critical, args.warning)
 if args.command == 'run':
-        run_in_container(container_name, args.cmd[0])
+    run_in_container(container_name, args.cmd[0])
